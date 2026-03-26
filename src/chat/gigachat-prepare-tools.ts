@@ -37,10 +37,32 @@ export function gigaChatPrepareTools(
 
   for (const tool of tools) {
     if (tool.type === 'function') {
+      const schema = tool.inputSchema ?? { type: 'object', properties: {} };
+
+      // Warn when the schema looks empty — this typically happens when
+      // tool() is called with a zod v4 `parameters` key instead of
+      // `inputSchema` + `jsonSchema()`.  The AI SDK serialises such
+      // schemas as {"properties":{},"additionalProperties":false}, which
+      // makes GigaChat ignore every parameter the tool should receive.
+      const props = (schema as Record<string, unknown>).properties;
+      if (
+        props &&
+        typeof props === 'object' &&
+        Object.keys(props).length === 0
+      ) {
+        toolWarnings.push({
+          type: 'other',
+          message:
+            `Tool "${tool.name}" has an empty inputSchema — parameters will not be sent to the model. ` +
+            'If you defined the tool with a zod `parameters` key, switch to ' +
+            '`inputSchema: jsonSchema(…)` instead (AI SDK v6 + zod v4 compatibility issue).',
+        });
+      }
+
       functions.push({
         name: tool.name,
         description: tool.description ?? '',
-        parameters: tool.inputSchema ?? { type: 'object', properties: {} },
+        parameters: schema,
       });
     } else {
       toolWarnings.push({

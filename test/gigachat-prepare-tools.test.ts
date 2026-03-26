@@ -63,6 +63,53 @@ describe('gigaChatPrepareTools', () => {
     expect(result.functionCall).toEqual({ name: 'search' });
   });
 
+  it('warns when tool has empty inputSchema (zod v4 compatibility)', () => {
+    const result = gigaChatPrepareTools(
+      [
+        {
+          type: 'function',
+          name: 'my_tool',
+          description: 'A tool',
+          inputSchema: { properties: {}, additionalProperties: false },
+        },
+      ],
+      undefined,
+    );
+
+    expect(result.functions).toEqual([
+      {
+        name: 'my_tool',
+        description: 'A tool',
+        parameters: { properties: {}, additionalProperties: false },
+      },
+    ]);
+    expect(result.toolWarnings.length).toBe(1);
+    expect(result.toolWarnings[0]).toMatchObject({
+      type: 'other',
+      message: expect.stringContaining('empty inputSchema'),
+    });
+  });
+
+  it('does not warn when inputSchema has properties', () => {
+    const result = gigaChatPrepareTools(
+      [
+        {
+          type: 'function',
+          name: 'my_tool',
+          description: 'A tool',
+          inputSchema: {
+            type: 'object',
+            properties: { x: { type: 'string' } },
+            required: ['x'],
+          },
+        },
+      ],
+      undefined,
+    );
+
+    expect(result.toolWarnings).toEqual([]);
+  });
+
   it('warns about unsupported tool types', () => {
     const result = gigaChatPrepareTools(
       [{ type: 'provider', id: 'x.y', name: 'r', args: {} }],
