@@ -1,0 +1,61 @@
+{
+  "name": "gigachat-ai-sdk-provider",
+  "version": "0.1.0",
+  "description": "Vercel AI SDK provider for GigaChat (powered by gigachat-js)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsup --tsconfig tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai-sdk",
+    "gigachat",
+    "sber",
+    "vercel",
+    "llm",
+    "provider",
+    "ai-sdk-provider"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nyddle/gigachat-ai-sdk-provider"
+  },
+  "dependencies": {
+    "@ai-sdk/provider": "^3.0.8",
+    "@ai-sdk/provider-utils": "^4.0.21",
+    "gigachat": "^0.0.18"
+  },
+  "peerDependencies": {
+    "zod": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "zod": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.37",
+    "ai": "^6.0.138",
+    "tsup": "^8.5.1",
+    "typescript": "~5.8.3",
+    "vitest": "^4.1.1"
+  }
+}
