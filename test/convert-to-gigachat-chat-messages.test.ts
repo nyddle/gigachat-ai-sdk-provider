@@ -88,6 +88,21 @@ describe('convertToGigaChatChatMessages', () => {
     ]);
   });
 
+  it('filters out non-text parts from user messages', () => {
+    const prompt: LanguageModelV3Prompt = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Look at this image' },
+          { type: 'image', image: new Uint8Array(), mimeType: 'image/png' },
+        ],
+      },
+    ];
+    expect(convertToGigaChatChatMessages(prompt)).toEqual([
+      { role: 'user', content: 'Look at this image' },
+    ]);
+  });
+
   it('converts string tool output', () => {
     const prompt: LanguageModelV3Prompt = [
       {
