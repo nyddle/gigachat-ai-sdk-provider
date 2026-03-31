@@ -1,6 +1,12 @@
 import type { LanguageModelV3, ProviderV3 } from '@ai-sdk/provider';
 import { NoSuchModelError } from '@ai-sdk/provider';
-import GigaChat from 'gigachat';
+import GigaChatModule from 'gigachat';
+
+// Handle CJS/ESM interop: Bun may wrap the CJS export differently than Node
+const GigaChat =
+  typeof GigaChatModule === 'function'
+    ? GigaChatModule
+    : (GigaChatModule as any).GigaChat ?? (GigaChatModule as any).default;
 import { GigaChatChatLanguageModel } from './chat/gigachat-chat-language-model.js';
 import type { GigaChatChatSettings } from './chat/gigachat-chat-options.js';
 import { VERSION } from './version.js';
