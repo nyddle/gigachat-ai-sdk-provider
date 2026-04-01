@@ -1,6 +1,12 @@
 import type { LanguageModelV3, ProviderV3 } from '@ai-sdk/provider';
 import { NoSuchModelError } from '@ai-sdk/provider';
-import GigaChat from 'gigachat';
+import GigaChatModule from 'gigachat';
+
+// Handle CJS/ESM interop: Bun may wrap the CJS export differently than Node
+const GigaChat =
+  typeof GigaChatModule === 'function'
+    ? GigaChatModule
+    : (GigaChatModule as any).GigaChat ?? (GigaChatModule as any).default;
 import { GigaChatChatLanguageModel } from './chat/gigachat-chat-language-model.js';
 import type { GigaChatChatSettings } from './chat/gigachat-chat-options.js';
 import { VERSION } from './version.js';
@@ -117,21 +123,11 @@ export interface GigaChatProvider extends ProviderV3 {
 export function createGigaChat(
   options: GigaChatProviderSettings = {},
 ): GigaChatProvider {
-  const clientConfig: Record<string, unknown> = {};
-
-  if (options.credentials) clientConfig.credentials = options.credentials;
-  if (options.scope) clientConfig.scope = options.scope;
-  if (options.baseUrl) clientConfig.baseUrl = options.baseUrl;
-  if (options.authUrl) clientConfig.authUrl = options.authUrl;
-  if (options.accessToken) clientConfig.accessToken = options.accessToken;
-  if (options.profanityCheck != null)
-    clientConfig.profanityCheck = options.profanityCheck;
-  if (options.verbose != null) clientConfig.verbose = options.verbose;
-  if (options.httpsAgent) clientConfig.httpsAgent = options.httpsAgent;
-  if (options.timeout != null) clientConfig.timeout = options.timeout;
-  if (options.user) clientConfig.user = options.user;
-  if (options.password) clientConfig.password = options.password;
-  if (options.flags) clientConfig.flags = options.flags;
+  // Pass through all options except `name` (provider-only) to gigachat-js
+  const { name: _name, ...rest } = options;
+  const clientConfig: Record<string, unknown> = Object.fromEntries(
+    Object.entries(rest).filter(([_, v]) => v != null),
+  );
 
   // Lazily create a single shared client instance
   let _client: InstanceType<typeof GigaChat> | null = null;
@@ -154,24 +150,22 @@ export function createGigaChat(
       modelSettings: settings,
     });
 
-  const provider = function (
-    modelId: string,
-    settings?: GigaChatChatSettings,
-  ) {
-    return createLanguageModel(modelId, settings);
-  } as GigaChatProvider;
-
-  (provider as any).specificationVersion = 'v3';
-  provider.languageModel = createLanguageModel;
-  provider.chat = createLanguageModel;
-
-  provider.embeddingModel = (modelId: string) => {
-    throw new NoSuchModelError({ modelId, modelType: 'embeddingModel' });
-  };
-
-  provider.imageModel = (modelId: string) => {
-    throw new NoSuchModelError({ modelId, modelType: 'imageModel' });
-  };
+  const provider = Object.assign(
+    function (modelId: string, settings?: GigaChatChatSettings) {
+      return createLanguageModel(modelId, settings);
+    } as GigaChatProvider,
+    {
+      specificationVersion: 'v3' as const,
+      languageModel: createLanguageModel,
+      chat: createLanguageModel,
+      embeddingModel(modelId: string) {
+        throw new NoSuchModelError({ modelId, modelType: 'embeddingModel' });
+      },
+      imageModel(modelId: string) {
+        throw new NoSuchModelError({ modelId, modelType: 'imageModel' });
+      },
+    },
+  );
 
   Object.defineProperty(provider, 'client', {
     get: getClient,

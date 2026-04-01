@@ -44,6 +44,8 @@ export function convertToGigaChatChatMessages(
 
       case 'assistant': {
         let text = '';
+        // GigaChat only supports a single function_call per message.
+        // If multiple tool-call parts are present, only the last one is kept.
         let functionCall: GigaChatMessage['function_call'] = undefined;
 
         for (const part of message.content) {
@@ -100,10 +102,19 @@ export function convertToGigaChatChatMessages(
             content = JSON.stringify(output);
           }
 
+          // GigaChat requires function result content to be valid JSON
+          let jsonContent: string;
+          try {
+            JSON.parse(content);
+            jsonContent = content;
+          } catch {
+            jsonContent = JSON.stringify(content || '');
+          }
+
           messages.push({
             role: 'function',
             name: part.toolName,
-            content,
+            content: jsonContent,
           });
         }
         break;

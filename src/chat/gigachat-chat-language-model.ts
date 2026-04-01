@@ -12,6 +12,31 @@ import { mapGigaChatFinishReason } from './map-gigachat-finish-reason.js';
 import { gigaChatPrepareTools } from './gigachat-prepare-tools.js';
 import type { GigaChatChatSettings } from './gigachat-chat-options.js';
 
+/**
+ * Normalize errors from gigachat-js which may produce unhelpful
+ * "[object Object]" messages. The real info is in response.data.
+ */
+function normalizeError(err: unknown): never {
+  if (err instanceof Error) {
+    const resp = (err as any).response;
+    let message = err.message;
+    if (resp?.data) {
+      const data = resp.data;
+      const detail =
+        typeof data === 'string'
+          ? data
+          : data.message ?? data.error ?? JSON.stringify(data);
+      const status = resp.status;
+      message = status ? `GigaChat ${status}: ${detail}` : detail;
+    } else if (message === '[object Object]') {
+      message = 'Unknown GigaChat error';
+    }
+    // Throw a clean Error without cyclic axios properties
+    throw new Error(message);
+  }
+  throw new Error(String(err));
+}
+
 interface GigaChatChatConfig {
   provider: string;
   getClient: () => any; // gigachat-js GigaChat instance
@@ -48,6 +73,7 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
   readonly provider: string;
 
   private readonly config: GigaChatChatConfig;
+  private toolCallCounter = 0;
 
   constructor(modelId: string, config: GigaChatChatConfig) {
     this.modelId = modelId;
@@ -69,6 +95,20 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
     }
     if (options.seed != null) {
       warnings.push({ type: 'unsupported', feature: 'seed' });
+    }
+
+    // Warn about non-text parts in user messages (images, files, etc.)
+    for (const msg of options.prompt) {
+      if (msg.role === 'user') {
+        for (const part of msg.content) {
+          if (part.type !== 'text') {
+            warnings.push({
+              type: 'unsupported',
+              feature: `user message part type "${part.type}"`,
+            });
+          }
+        }
+      }
     }
 
     const { functions, functionCall, toolWarnings } = gigaChatPrepareTools(
@@ -112,7 +152,7 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
     const { payload, warnings } = this._buildPayload(options, false);
     const client = this.config.getClient();
 
-    const rawResponse = await client.chat(payload);
+    const rawResponse = await client.chat(payload).catch(normalizeError);
     const choice = rawResponse.choices?.[0];
 
     if (!choice) {
@@ -127,7 +167,7 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
 
     if (choice.message.function_call) {
       const fc = choice.message.function_call;
-      const toolCallId = `call_${Date.now()}`;
+      const toolCallId = `call_${this.toolCallCounter++}`;
       content.push({
         type: 'tool-call',
         toolCallId,
@@ -144,14 +184,13 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
       finishReason: mapGigaChatFinishReason(choice.finish_reason),
       usage: mapUsage(rawResponse.usage),
       warnings,
-      request: { body: payload },
+      request: { body: JSON.stringify(payload) },
       response: {
         id: rawResponse.id ?? undefined,
         modelId: rawResponse.model ?? undefined,
         timestamp: rawResponse.created
           ? new Date(rawResponse.created * 1000)
           : undefined,
-        body: rawResponse,
       },
     };
   }
@@ -162,18 +201,23 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
     const { payload, warnings } = this._buildPayload(options, true);
     const client = this.config.getClient();
 
-    const asyncIterator = client.stream(payload);
+    let asyncIterator: AsyncIterable<any>;
+    try {
+      asyncIterator = client.stream(payload);
+    } catch (err) {
+      normalizeError(err);
+    }
 
     let isFirstChunk = true;
     let isActiveText = false;
     let finishReason = mapGigaChatFinishReason(undefined);
     let usage: any = undefined;
+    const self = this;
 
     const stream = new ReadableStream<LanguageModelV3StreamPart>({
-      start(controller) {
+      async start(controller) {
         controller.enqueue({ type: 'stream-start', warnings });
-      },
-      async pull(controller) {
+
         try {
           for await (const chunk of asyncIterator) {
             if (options.includeRawChunks) {
@@ -227,7 +271,7 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
                 isActiveText = false;
               }
               const fc = delta.function_call;
-              const toolCallId = `call_${Date.now()}`;
+              const toolCallId = `call_${self.toolCallCounter++}`;
               const inputStr =
                 typeof fc.arguments === 'string'
                   ? fc.arguments
@@ -267,14 +311,18 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
           });
           controller.close();
         } catch (error) {
-          controller.error(error);
+          try {
+            normalizeError(error);
+          } catch (normalized) {
+            controller.error(normalized);
+          }
         }
       },
     });
 
     return {
       stream,
-      request: { body: payload },
+      request: { body: JSON.stringify(payload) },
       response: {},
     };
   }
