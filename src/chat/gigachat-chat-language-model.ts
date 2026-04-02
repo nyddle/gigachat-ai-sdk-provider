@@ -152,7 +152,9 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
     const { payload, warnings } = this._buildPayload(options, false);
     const client = this.config.getClient();
 
-    const rawResponse = await client.chat(payload).catch(normalizeError);
+    const rawResult = await client.chat(payload).catch(normalizeError);
+    // Deep-clone to strip hidden axios/http references that cause cyclic errors in Bun
+    const rawResponse = JSON.parse(JSON.stringify(rawResult));
     const choice = rawResponse.choices?.[0];
 
     if (!choice) {
@@ -219,7 +221,11 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
         controller.enqueue({ type: 'stream-start', warnings });
 
         try {
-          for await (const chunk of asyncIterator) {
+          for await (const rawChunk of asyncIterator) {
+            // Deep-clone chunk to strip hidden axios/http references
+            // that cause cyclic serialization errors in Bun
+            const chunk = JSON.parse(JSON.stringify(rawChunk));
+
             if (options.includeRawChunks) {
               controller.enqueue({ type: 'raw', rawValue: chunk });
             }
