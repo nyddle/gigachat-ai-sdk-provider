@@ -15,15 +15,10 @@ import { VERSION } from './version.js';
  * ai@5 uses @ai-sdk/provider@2 (V2), ai@6+ uses @ai-sdk/provider@3 (V3).
  */
 function detectSpecVersion(): 'v2' | 'v3' {
-  try {
-    // V3 has LanguageModelV3FinishReason as an object type, V2 has it as string
-    // Simplest heuristic: check if the provider package exports V3-specific types
-    // by checking the specificationVersion we're running under
-    const provider = require('@ai-sdk/provider');
-    // V2 package doesn't export LanguageModelV3Usage
-    if (provider.LanguageModelV3Usage) return 'v3';
-  } catch {}
-  return 'v2';
+  // Always use V3: OpenCode (ai@5) supports V3 compat mode and
+  // its internal providers use V3-style stream parts with specificationVersion='v2'.
+  // Using V3 lets ai SDK properly generate finish-step events.
+  return 'v3';
 }
 
 const detectedSpec = detectSpecVersion();

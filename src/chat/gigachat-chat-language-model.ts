@@ -361,7 +361,7 @@ export class GigaChatChatLanguageModel {
             const delta = choice.delta;
             if (!delta) continue;
 
-            // Text content — emit both V2 and V3 fields for compatibility
+            // Text content — always use V3-style stream parts (OpenCode expects this)
             if (delta.content != null && delta.content.length > 0) {
               if (!isActiveText) {
                 controller.enqueue({ type: 'text-start', id: 'txt-0' });
@@ -371,7 +371,6 @@ export class GigaChatChatLanguageModel {
                 type: 'text-delta',
                 id: 'txt-0',
                 delta: delta.content,
-                textDelta: delta.content,
               });
             }
 
@@ -386,49 +385,30 @@ export class GigaChatChatLanguageModel {
               const toolCallId = `call_${self.toolCallCounter++}`;
               const input = self._makeToolCallInput(fc);
 
-              if (isV2) {
-                const inputStr =
-                  typeof fc.arguments === 'string'
-                    ? fc.arguments
-                    : JSON.stringify(fc.arguments);
-                controller.enqueue({
-                  type: 'tool-call-delta',
-                  toolCallType: 'function',
-                  toolCallId,
-                  toolName: fc.name,
-                  argsTextDelta: inputStr,
-                });
-                controller.enqueue({
-                  type: 'tool-call',
-                  toolCallType: 'function',
-                  toolCallId,
-                  toolName: fc.name,
-                  args: inputStr,
-                });
-              } else {
-                const inputStr =
-                  typeof input === 'string' ? input : JSON.stringify(input);
-                controller.enqueue({
-                  type: 'tool-input-start',
-                  id: toolCallId,
-                  toolName: fc.name,
-                });
-                controller.enqueue({
-                  type: 'tool-input-delta',
-                  id: toolCallId,
-                  delta: inputStr,
-                });
-                controller.enqueue({
-                  type: 'tool-input-end',
-                  id: toolCallId,
-                });
-                controller.enqueue({
-                  type: 'tool-call',
-                  toolCallId,
-                  toolName: fc.name,
-                  input: inputStr,
-                });
-              }
+              const inputStr =
+                typeof fc.arguments === 'string'
+                  ? fc.arguments
+                  : JSON.stringify(fc.arguments);
+              controller.enqueue({
+                type: 'tool-input-start',
+                id: toolCallId,
+                toolName: fc.name,
+              });
+              controller.enqueue({
+                type: 'tool-input-delta',
+                id: toolCallId,
+                delta: inputStr,
+              });
+              controller.enqueue({
+                type: 'tool-input-end',
+                id: toolCallId,
+              });
+              controller.enqueue({
+                type: 'tool-call',
+                toolCallId,
+                toolName: fc.name,
+                input: inputStr,
+              });
             }
           }
 

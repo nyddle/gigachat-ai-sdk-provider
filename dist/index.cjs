@@ -478,8 +478,7 @@ var GigaChatChatLanguageModel = class {
               controller.enqueue({
                 type: "text-delta",
                 id: "txt-0",
-                delta: delta.content,
-                textDelta: delta.content
+                delta: delta.content
               });
             }
             if (delta.function_call) {
@@ -490,45 +489,27 @@ var GigaChatChatLanguageModel = class {
               const fc = delta.function_call;
               const toolCallId = `call_${self.toolCallCounter++}`;
               const input = self._makeToolCallInput(fc);
-              if (isV2) {
-                const inputStr = typeof fc.arguments === "string" ? fc.arguments : JSON.stringify(fc.arguments);
-                controller.enqueue({
-                  type: "tool-call-delta",
-                  toolCallType: "function",
-                  toolCallId,
-                  toolName: fc.name,
-                  argsTextDelta: inputStr
-                });
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallType: "function",
-                  toolCallId,
-                  toolName: fc.name,
-                  args: inputStr
-                });
-              } else {
-                const inputStr = typeof input === "string" ? input : JSON.stringify(input);
-                controller.enqueue({
-                  type: "tool-input-start",
-                  id: toolCallId,
-                  toolName: fc.name
-                });
-                controller.enqueue({
-                  type: "tool-input-delta",
-                  id: toolCallId,
-                  delta: inputStr
-                });
-                controller.enqueue({
-                  type: "tool-input-end",
-                  id: toolCallId
-                });
-                controller.enqueue({
-                  type: "tool-call",
-                  toolCallId,
-                  toolName: fc.name,
-                  input: inputStr
-                });
-              }
+              const inputStr = typeof fc.arguments === "string" ? fc.arguments : JSON.stringify(fc.arguments);
+              controller.enqueue({
+                type: "tool-input-start",
+                id: toolCallId,
+                toolName: fc.name
+              });
+              controller.enqueue({
+                type: "tool-input-delta",
+                id: toolCallId,
+                delta: inputStr
+              });
+              controller.enqueue({
+                type: "tool-input-end",
+                id: toolCallId
+              });
+              controller.enqueue({
+                type: "tool-call",
+                toolCallId,
+                toolName: fc.name,
+                input: inputStr
+              });
             }
           }
           if (isActiveText) {
@@ -561,12 +542,7 @@ var GigaChatChatLanguageModel = class {
 // src/gigachat-provider.ts
 var GigaChat = typeof import_gigachat.default === "function" ? import_gigachat.default : import_gigachat.default.GigaChat ?? import_gigachat.default.default;
 function detectSpecVersion() {
-  try {
-    const provider = require("@ai-sdk/provider");
-    if (provider.LanguageModelV3Usage) return "v3";
-  } catch {
-  }
-  return "v2";
+  return "v3";
 }
 var detectedSpec = detectSpecVersion();
 function createGigaChat(options = {}) {
