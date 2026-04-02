@@ -569,7 +569,7 @@ function mapGigaChatFinishReason(raw) {
 }
 
 // src/version.ts
-var VERSION = true ? "0.2.0" : "0.0.0-test";
+var VERSION = true ? "0.2.1" : "0.0.0-test";
 export {
   GigaChatChatLanguageModel,
   VERSION,

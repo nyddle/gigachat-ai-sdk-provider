@@ -611,7 +611,7 @@ function mapGigaChatFinishReason(raw) {
 }
 
 // src/version.ts
-var VERSION = true ? "0.2.0" : "0.0.0-test";
+var VERSION = true ? "0.2.1" : "0.0.0-test";
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   GigaChatChatLanguageModel,
