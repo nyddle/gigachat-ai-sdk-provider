@@ -1,14 +1,4 @@
-import type {
-  LanguageModelV3,
-  LanguageModelV3CallOptions,
-  LanguageModelV3GenerateResult,
-  LanguageModelV3StreamPart,
-  LanguageModelV3StreamResult,
-  LanguageModelV3Usage,
-  SharedV3Warning,
-} from '@ai-sdk/provider';
 import { convertToGigaChatChatMessages } from './convert-to-gigachat-chat-messages.js';
-import { mapGigaChatFinishReason } from './map-gigachat-finish-reason.js';
 import { gigaChatPrepareTools } from './gigachat-prepare-tools.js';
 import type { GigaChatChatSettings } from './gigachat-chat-options.js';
 
@@ -43,7 +33,18 @@ interface GigaChatChatConfig {
   modelSettings?: GigaChatChatSettings;
 }
 
-function mapUsage(raw: any): LanguageModelV3Usage {
+function mapUsageV2(raw: any) {
+  return {
+    inputTokens: raw?.prompt_tokens ?? undefined,
+    outputTokens: raw?.completion_tokens ?? undefined,
+    totalTokens:
+      raw?.prompt_tokens != null && raw?.completion_tokens != null
+        ? raw.prompt_tokens + raw.completion_tokens
+        : undefined,
+  };
+}
+
+function mapUsageV3(raw: any) {
   return {
     inputTokens: {
       total: raw?.prompt_tokens ?? undefined,
@@ -59,30 +60,60 @@ function mapUsage(raw: any): LanguageModelV3Usage {
   };
 }
 
+function mapFinishReasonV2(raw: string | null | undefined): string {
+  if (!raw) return 'other';
+  switch (raw) {
+    case 'stop':
+      return 'stop';
+    case 'length':
+      return 'length';
+    case 'function_call':
+      return 'tool-calls';
+    case 'blacklist':
+      return 'content-filter';
+    case 'error':
+      return 'error';
+    default:
+      return 'other';
+  }
+}
+
+function mapFinishReasonV3(raw: string | null | undefined) {
+  return {
+    unified: mapFinishReasonV2(raw) as any,
+    raw: raw ?? undefined,
+  };
+}
+
 /**
- * AI SDK V3 LanguageModel backed by the gigachat-js client.
- *
- * Uses the `gigachat` npm package for all API calls, which handles
- * OAuth token management, automatic token refresh, and GigaChat-specific auth.
+ * AI SDK LanguageModel backed by the gigachat-js client.
+ * Supports both V2 (ai@5 / OpenCode) and V3 (ai@6+) specs.
  */
-export class GigaChatChatLanguageModel implements LanguageModelV3 {
-  readonly specificationVersion = 'v3' as const;
+export class GigaChatChatLanguageModel {
+  readonly specificationVersion: string;
   readonly supportedUrls: Record<string, RegExp[]> = {};
 
   readonly modelId: string;
   readonly provider: string;
 
   private readonly config: GigaChatChatConfig;
+  private readonly isV2: boolean;
   private toolCallCounter = 0;
 
-  constructor(modelId: string, config: GigaChatChatConfig) {
+  constructor(
+    modelId: string,
+    config: GigaChatChatConfig,
+    specVersion: 'v2' | 'v3' = 'v2',
+  ) {
     this.modelId = modelId;
     this.provider = config.provider;
     this.config = config;
+    this.specificationVersion = specVersion;
+    this.isV2 = specVersion === 'v2';
   }
 
-  private _buildPayload(options: LanguageModelV3CallOptions, stream: boolean) {
-    const warnings: SharedV3Warning[] = [];
+  private _buildPayload(options: any, stream: boolean) {
+    const warnings: any[] = [];
 
     if (options.topK != null) {
       warnings.push({ type: 'unsupported', feature: 'topK' });
@@ -97,7 +128,6 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
       warnings.push({ type: 'unsupported', feature: 'seed' });
     }
 
-    // Warn about non-text parts in user messages (images, files, etc.)
     for (const msg of options.prompt) {
       if (msg.role === 'user') {
         for (const part of msg.content) {
@@ -124,11 +154,13 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
 
     if (options.maxOutputTokens != null)
       payload.max_tokens = options.maxOutputTokens;
+    // V2 uses maxTokens, V3 uses maxOutputTokens
+    if ((options as any).maxTokens != null)
+      payload.max_tokens = (options as any).maxTokens;
     if (options.temperature != null) payload.temperature = options.temperature;
     if (options.topP != null) payload.top_p = options.topP;
     if (options.stopSequences?.length) payload.stop = options.stopSequences;
 
-    // GigaChat-specific settings
     const settings = this.config.modelSettings;
     if (settings?.profanityCheck != null)
       payload.profanity_check = settings.profanityCheck;
@@ -146,9 +178,27 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
     return { payload, warnings: [...warnings, ...toolWarnings] };
   }
 
-  async doGenerate(
-    options: LanguageModelV3CallOptions,
-  ): Promise<LanguageModelV3GenerateResult> {
+  private _mapUsage(raw: any) {
+    return this.isV2 ? mapUsageV2(raw) : mapUsageV3(raw);
+  }
+
+  private _mapFinishReason(raw: string | null | undefined) {
+    return this.isV2 ? mapFinishReasonV2(raw) : mapFinishReasonV3(raw);
+  }
+
+  private _makeToolCallInput(fc: any) {
+    // V2: input is parsed object, V3: input is JSON string
+    if (this.isV2) {
+      return typeof fc.arguments === 'string'
+        ? JSON.parse(fc.arguments)
+        : fc.arguments;
+    }
+    return typeof fc.arguments === 'string'
+      ? fc.arguments
+      : JSON.stringify(fc.arguments);
+  }
+
+  async doGenerate(options: any): Promise<any> {
     const { payload, warnings } = this._buildPayload(options, false);
     const client = this.config.getClient();
 
@@ -161,7 +211,7 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
       throw new Error('GigaChat returned no choices');
     }
 
-    const content: LanguageModelV3GenerateResult['content'] = [];
+    const content: any[] = [];
 
     if (choice.message.content) {
       content.push({ type: 'text', text: choice.message.content });
@@ -174,17 +224,17 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
         type: 'tool-call',
         toolCallId,
         toolName: fc.name,
-        input:
-          typeof fc.arguments === 'string'
-            ? fc.arguments
-            : JSON.stringify(fc.arguments),
+        // V2 expects args as object, V3 expects input as string
+        ...(this.isV2
+          ? { args: this._makeToolCallInput(fc) }
+          : { input: this._makeToolCallInput(fc) }),
       });
     }
 
     return {
       content,
-      finishReason: mapGigaChatFinishReason(choice.finish_reason),
-      usage: mapUsage(rawResponse.usage),
+      finishReason: this._mapFinishReason(choice.finish_reason),
+      usage: this._mapUsage(rawResponse.usage),
       warnings,
       request: { body: JSON.stringify(payload) },
       response: {
@@ -194,12 +244,11 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
           ? new Date(rawResponse.created * 1000)
           : undefined,
       },
+      rawCall: { rawPrompt: payload.messages, rawSettings: payload },
     };
   }
 
-  async doStream(
-    options: LanguageModelV3CallOptions,
-  ): Promise<LanguageModelV3StreamResult> {
+  async doStream(options: any): Promise<any> {
     const { payload, warnings } = this._buildPayload(options, true);
     const client = this.config.getClient();
 
@@ -212,25 +261,26 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
 
     let isFirstChunk = true;
     let isActiveText = false;
-    let finishReason = mapGigaChatFinishReason(undefined);
+    let finishReason = this._mapFinishReason(undefined);
     let usage: any = undefined;
     const self = this;
+    const isV2 = this.isV2;
 
-    const stream = new ReadableStream<LanguageModelV3StreamPart>({
+    const stream = new ReadableStream({
       async start(controller) {
-        controller.enqueue({ type: 'stream-start', warnings });
+        if (!isV2) {
+          controller.enqueue({ type: 'stream-start', warnings });
+        }
 
         try {
           for await (const rawChunk of asyncIterator) {
-            // Deep-clone chunk to strip hidden axios/http references
-            // that cause cyclic serialization errors in Bun
+            // Deep-clone to strip hidden axios/http references
             const chunk = JSON.parse(JSON.stringify(rawChunk));
 
             if (options.includeRawChunks) {
               controller.enqueue({ type: 'raw', rawValue: chunk });
             }
 
-            // Emit response metadata on first chunk
             if (isFirstChunk) {
               isFirstChunk = false;
               controller.enqueue({
@@ -251,7 +301,7 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
             if (!choice) continue;
 
             if (choice.finish_reason) {
-              finishReason = mapGigaChatFinishReason(choice.finish_reason);
+              finishReason = self._mapFinishReason(choice.finish_reason);
             }
 
             const delta = choice.delta;
@@ -259,61 +309,89 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
 
             // Text content
             if (delta.content != null && delta.content.length > 0) {
-              if (!isActiveText) {
-                controller.enqueue({ type: 'text-start', id: 'txt-0' });
-                isActiveText = true;
+              if (isV2) {
+                controller.enqueue({
+                  type: 'text-delta',
+                  textDelta: delta.content,
+                });
+              } else {
+                if (!isActiveText) {
+                  controller.enqueue({ type: 'text-start', id: 'txt-0' });
+                  isActiveText = true;
+                }
+                controller.enqueue({
+                  type: 'text-delta',
+                  id: 'txt-0',
+                  delta: delta.content,
+                });
               }
-              controller.enqueue({
-                type: 'text-delta',
-                id: 'txt-0',
-                delta: delta.content,
-              });
             }
 
             // GigaChat sends complete function_call in one chunk
             if (delta.function_call) {
-              if (isActiveText) {
+              if (!isV2 && isActiveText) {
                 controller.enqueue({ type: 'text-end', id: 'txt-0' });
                 isActiveText = false;
               }
+
               const fc = delta.function_call;
               const toolCallId = `call_${self.toolCallCounter++}`;
-              const inputStr =
-                typeof fc.arguments === 'string'
-                  ? fc.arguments
-                  : JSON.stringify(fc.arguments);
+              const input = self._makeToolCallInput(fc);
 
-              controller.enqueue({
-                type: 'tool-input-start',
-                id: toolCallId,
-                toolName: fc.name,
-              });
-              controller.enqueue({
-                type: 'tool-input-delta',
-                id: toolCallId,
-                delta: inputStr,
-              });
-              controller.enqueue({
-                type: 'tool-input-end',
-                id: toolCallId,
-              });
-              controller.enqueue({
-                type: 'tool-call',
-                toolCallId,
-                toolName: fc.name,
-                input: inputStr,
-              });
+              if (isV2) {
+                const inputStr =
+                  typeof fc.arguments === 'string'
+                    ? fc.arguments
+                    : JSON.stringify(fc.arguments);
+                controller.enqueue({
+                  type: 'tool-call-delta',
+                  toolCallType: 'function',
+                  toolCallId,
+                  toolName: fc.name,
+                  argsTextDelta: inputStr,
+                });
+                controller.enqueue({
+                  type: 'tool-call',
+                  toolCallType: 'function',
+                  toolCallId,
+                  toolName: fc.name,
+                  args: inputStr,
+                });
+              } else {
+                const inputStr =
+                  typeof input === 'string' ? input : JSON.stringify(input);
+                controller.enqueue({
+                  type: 'tool-input-start',
+                  id: toolCallId,
+                  toolName: fc.name,
+                });
+                controller.enqueue({
+                  type: 'tool-input-delta',
+                  id: toolCallId,
+                  delta: inputStr,
+                });
+                controller.enqueue({
+                  type: 'tool-input-end',
+                  id: toolCallId,
+                });
+                controller.enqueue({
+                  type: 'tool-call',
+                  toolCallId,
+                  toolName: fc.name,
+                  input: inputStr,
+                });
+              }
             }
           }
 
           // Stream ended
-          if (isActiveText) {
+          if (!isV2 && isActiveText) {
             controller.enqueue({ type: 'text-end', id: 'txt-0' });
           }
           controller.enqueue({
             type: 'finish',
             finishReason,
-            usage: mapUsage(usage),
+            usage: self._mapUsage(usage),
           });
           controller.close();
         } catch (error) {
@@ -330,6 +408,7 @@ export class GigaChatChatLanguageModel implements LanguageModelV3 {
       stream,
       request: { body: JSON.stringify(payload) },
       response: {},
+      rawCall: { rawPrompt: payload.messages, rawSettings: payload },
     };
   }
 }

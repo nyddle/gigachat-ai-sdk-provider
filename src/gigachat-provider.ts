@@ -1,4 +1,3 @@
-import type { LanguageModelV3, ProviderV3 } from '@ai-sdk/provider';
 import { NoSuchModelError } from '@ai-sdk/provider';
 import GigaChatModule from 'gigachat';
 
@@ -10,6 +9,24 @@ const GigaChat =
 import { GigaChatChatLanguageModel } from './chat/gigachat-chat-language-model.js';
 import type { GigaChatChatSettings } from './chat/gigachat-chat-options.js';
 import { VERSION } from './version.js';
+
+/**
+ * Detect which AI SDK spec version is available.
+ * ai@5 uses @ai-sdk/provider@2 (V2), ai@6+ uses @ai-sdk/provider@3 (V3).
+ */
+function detectSpecVersion(): 'v2' | 'v3' {
+  try {
+    // V3 has LanguageModelV3FinishReason as an object type, V2 has it as string
+    // Simplest heuristic: check if the provider package exports V3-specific types
+    // by checking the specificationVersion we're running under
+    const provider = require('@ai-sdk/provider');
+    // V2 package doesn't export LanguageModelV3Usage
+    if (provider.LanguageModelV3Usage) return 'v3';
+  } catch {}
+  return 'v2';
+}
+
+const detectedSpec = detectSpecVersion();
 
 export interface GigaChatProviderSettings {
   /**
@@ -83,34 +100,22 @@ export interface GigaChatProviderSettings {
    * @default 'gigachat'
    */
   name?: string;
+
+  /**
+   * Force a specific AI SDK specification version.
+   * Auto-detected by default (v2 for ai@5/OpenCode, v3 for ai@6+).
+   */
+  specVersion?: 'v2' | 'v3';
 }
 
 /**
  * GigaChat provider for the Vercel AI SDK.
- *
- * Both callable and has named methods:
- * ```ts
- * const model = gigachat('GigaChat-Pro');           // callable
- * const model = gigachat.languageModel('GigaChat'); // named
- * ```
+ * Supports both V2 (ai@5 / OpenCode) and V3 (ai@6+) specs.
  */
-export interface GigaChatProvider extends ProviderV3 {
-  (
-    modelId: string,
-    settings?: GigaChatChatSettings,
-  ): LanguageModelV3;
-
-  languageModel(
-    modelId: string,
-    settings?: GigaChatChatSettings,
-  ): LanguageModelV3;
-
-  chat(
-    modelId: string,
-    settings?: GigaChatChatSettings,
-  ): LanguageModelV3;
-
-  /** The underlying gigachat-js client for advanced usage (embeddings, etc.) */
+export interface GigaChatProvider {
+  (modelId: string, settings?: GigaChatChatSettings): any;
+  languageModel(modelId: string, settings?: GigaChatChatSettings): any;
+  chat(modelId: string, settings?: GigaChatChatSettings): any;
   readonly client: InstanceType<typeof GigaChat>;
 }
 
@@ -123,13 +128,13 @@ export interface GigaChatProvider extends ProviderV3 {
 export function createGigaChat(
   options: GigaChatProviderSettings = {},
 ): GigaChatProvider {
-  // Pass through all options except `name` (provider-only) to gigachat-js
-  const { name: _name, ...rest } = options;
+  const { name: _name, specVersion: _specVersion, ...rest } = options;
   const clientConfig: Record<string, unknown> = Object.fromEntries(
     Object.entries(rest).filter(([_, v]) => v != null),
   );
 
-  // Lazily create a single shared client instance
+  const specVersion = _specVersion ?? detectedSpec;
+
   let _client: InstanceType<typeof GigaChat> | null = null;
   const getClient = () => {
     if (!_client) {
@@ -143,19 +148,23 @@ export function createGigaChat(
   const createLanguageModel = (
     modelId: string,
     settings?: GigaChatChatSettings,
-  ): LanguageModelV3 =>
-    new GigaChatChatLanguageModel(modelId, {
-      provider: providerName,
-      getClient,
-      modelSettings: settings,
-    });
+  ) =>
+    new GigaChatChatLanguageModel(
+      modelId,
+      {
+        provider: providerName,
+        getClient,
+        modelSettings: settings,
+      },
+      specVersion,
+    );
 
   const provider = Object.assign(
     function (modelId: string, settings?: GigaChatChatSettings) {
       return createLanguageModel(modelId, settings);
     } as GigaChatProvider,
     {
-      specificationVersion: 'v3' as const,
+      specificationVersion: specVersion,
       languageModel: createLanguageModel,
       chat: createLanguageModel,
       embeddingModel(modelId: string) {

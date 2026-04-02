@@ -1,29 +1,24 @@
-import type { LanguageModelV3FinishReason } from '@ai-sdk/provider';
-
 /**
- * Maps GigaChat finish_reason to AI SDK V3 finish reason.
+ * Maps GigaChat finish_reason to AI SDK finish reason string.
  *
  * GigaChat reasons: 'stop', 'length', 'function_call', 'blacklist', 'error'
  */
 export function mapGigaChatFinishReason(
   raw: string | null | undefined,
-): LanguageModelV3FinishReason {
-  if (!raw) {
-    return { unified: 'other', raw: raw ?? undefined };
-  }
-
+): string {
+  if (!raw) return 'other';
   switch (raw) {
     case 'stop':
-      return { unified: 'stop', raw };
+      return 'stop';
     case 'length':
-      return { unified: 'length', raw };
+      return 'length';
     case 'function_call':
-      return { unified: 'tool-calls', raw };
+      return 'tool-calls';
     case 'blacklist':
-      return { unified: 'content-filter', raw };
+      return 'content-filter';
     case 'error':
-      return { unified: 'error', raw };
+      return 'error';
     default:
-      return { unified: 'other', raw };
+      return 'other';
   }
 }
