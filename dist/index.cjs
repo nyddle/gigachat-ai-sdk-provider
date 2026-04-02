@@ -195,7 +195,13 @@ function normalizeError(err) {
     let message = err.message;
     if (resp?.data) {
       const data = resp.data;
-      const detail = typeof data === "string" ? data : data.message ?? data.error ?? JSON.stringify(data);
+      const detail = typeof data === "string" ? data : data.message ?? data.error ?? (function() {
+        try {
+          return JSON.stringify(data);
+        } catch {
+          return String(data.status ?? data.code ?? "Unknown error");
+        }
+      })();
       const status = resp.status;
       message = status ? `GigaChat ${status}: ${detail}` : detail;
     } else if (message === "[object Object]") {
@@ -204,6 +210,56 @@ function normalizeError(err) {
     throw new Error(message);
   }
   throw new Error(String(err));
+}
+function safeClone(obj) {
+  if (obj == null || typeof obj !== "object") return obj;
+  const { choices, created, model, object: obj_, usage, id, xHeaders, ...rest } = obj;
+  const result = {};
+  if (id !== void 0) result.id = id;
+  if (model !== void 0) result.model = model;
+  if (created !== void 0) result.created = created;
+  if (obj_ !== void 0) result.object = obj_;
+  if (usage !== void 0) {
+    result.usage = {
+      prompt_tokens: usage?.prompt_tokens,
+      completion_tokens: usage?.completion_tokens,
+      precached_prompt_tokens: usage?.precached_prompt_tokens,
+      total_tokens: usage?.total_tokens
+    };
+  }
+  if (choices) {
+    result.choices = choices.map((c) => {
+      const choice = {};
+      if (c.index !== void 0) choice.index = c.index;
+      if (c.finish_reason !== void 0) choice.finish_reason = c.finish_reason;
+      if (c.message) {
+        choice.message = {
+          role: c.message.role,
+          content: c.message.content
+        };
+        if (c.message.function_call) {
+          choice.message.function_call = {
+            name: c.message.function_call.name,
+            arguments: c.message.function_call.arguments
+          };
+        }
+      }
+      if (c.delta) {
+        choice.delta = {
+          role: c.delta.role,
+          content: c.delta.content
+        };
+        if (c.delta.function_call) {
+          choice.delta.function_call = {
+            name: c.delta.function_call.name,
+            arguments: c.delta.function_call.arguments
+          };
+        }
+      }
+      return choice;
+    });
+  }
+  return result;
 }
 function mapUsageV2(raw) {
   return {
@@ -337,7 +393,7 @@ var GigaChatChatLanguageModel = class {
     const { payload, warnings } = this._buildPayload(options, false);
     const client = this.config.getClient();
     const rawResult = await client.chat(payload).catch(normalizeError);
-    const rawResponse = JSON.parse(JSON.stringify(rawResult));
+    const rawResponse = safeClone(rawResult);
     const choice = rawResponse.choices?.[0];
     if (!choice) {
       throw new Error("GigaChat returned no choices");
@@ -388,12 +444,10 @@ var GigaChatChatLanguageModel = class {
     const isV2 = this.isV2;
     const stream = new ReadableStream({
       async start(controller) {
-        if (!isV2) {
-          controller.enqueue({ type: "stream-start", warnings });
-        }
+        controller.enqueue({ type: "stream-start", warnings });
         try {
           for await (const rawChunk of asyncIterator) {
-            const chunk = JSON.parse(JSON.stringify(rawChunk));
+            const chunk = safeClone(rawChunk);
             if (options.includeRawChunks) {
               controller.enqueue({ type: "raw", rawValue: chunk });
             }
@@ -417,25 +471,19 @@ var GigaChatChatLanguageModel = class {
             const delta = choice.delta;
             if (!delta) continue;
             if (delta.content != null && delta.content.length > 0) {
-              if (isV2) {
-                controller.enqueue({
-                  type: "text-delta",
-                  textDelta: delta.content
-                });
-              } else {
-                if (!isActiveText) {
-                  controller.enqueue({ type: "text-start", id: "txt-0" });
-                  isActiveText = true;
-                }
-                controller.enqueue({
-                  type: "text-delta",
-                  id: "txt-0",
-                  delta: delta.content
-                });
+              if (!isActiveText) {
+                controller.enqueue({ type: "text-start", id: "txt-0" });
+                isActiveText = true;
               }
+              controller.enqueue({
+                type: "text-delta",
+                id: "txt-0",
+                delta: delta.content,
+                textDelta: delta.content
+              });
             }
             if (delta.function_call) {
-              if (!isV2 && isActiveText) {
+              if (isActiveText) {
                 controller.enqueue({ type: "text-end", id: "txt-0" });
                 isActiveText = false;
               }
@@ -483,7 +531,7 @@ var GigaChatChatLanguageModel = class {
               }
             }
           }
-          if (!isV2 && isActiveText) {
+          if (isActiveText) {
             controller.enqueue({ type: "text-end", id: "txt-0" });
           }
           controller.enqueue({
@@ -587,7 +635,7 @@ function mapGigaChatFinishReason(raw) {
 }
 
 // src/version.ts
-var VERSION = true ? "0.1.1" : "0.0.0-test";
+var VERSION = true ? "0.2.0" : "0.0.0-test";
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   GigaChatChatLanguageModel,

@@ -15,7 +15,7 @@ function normalizeError(err: unknown): never {
       const detail =
         typeof data === 'string'
           ? data
-          : data.message ?? data.error ?? JSON.stringify(data);
+          : data.message ?? data.error ?? (function() { try { return JSON.stringify(data); } catch { return String(data.status ?? data.code ?? 'Unknown error'); } })();
       const status = resp.status;
       message = status ? `GigaChat ${status}: ${detail}` : detail;
     } else if (message === '[object Object]') {
@@ -25,6 +25,62 @@ function normalizeError(err: unknown): never {
     throw new Error(message);
   }
   throw new Error(String(err));
+}
+
+/**
+ * Safely extract only known fields from a GigaChat API response.
+ * Avoids JSON.stringify on potentially cyclic axios objects.
+ */
+function safeClone(obj: any): any {
+  if (obj == null || typeof obj !== 'object') return obj;
+  // Extract only the fields we care about from GigaChat responses
+  const { choices, created, model, object: obj_, usage, id, xHeaders, ...rest } = obj;
+  const result: any = {};
+  if (id !== undefined) result.id = id;
+  if (model !== undefined) result.model = model;
+  if (created !== undefined) result.created = created;
+  if (obj_ !== undefined) result.object = obj_;
+  if (usage !== undefined) {
+    result.usage = {
+      prompt_tokens: usage?.prompt_tokens,
+      completion_tokens: usage?.completion_tokens,
+      precached_prompt_tokens: usage?.precached_prompt_tokens,
+      total_tokens: usage?.total_tokens,
+    };
+  }
+  if (choices) {
+    result.choices = choices.map((c: any) => {
+      const choice: any = {};
+      if (c.index !== undefined) choice.index = c.index;
+      if (c.finish_reason !== undefined) choice.finish_reason = c.finish_reason;
+      if (c.message) {
+        choice.message = {
+          role: c.message.role,
+          content: c.message.content,
+        };
+        if (c.message.function_call) {
+          choice.message.function_call = {
+            name: c.message.function_call.name,
+            arguments: c.message.function_call.arguments,
+          };
+        }
+      }
+      if (c.delta) {
+        choice.delta = {
+          role: c.delta.role,
+          content: c.delta.content,
+        };
+        if (c.delta.function_call) {
+          choice.delta.function_call = {
+            name: c.delta.function_call.name,
+            arguments: c.delta.function_call.arguments,
+          };
+        }
+      }
+      return choice;
+    });
+  }
+  return result;
 }
 
 interface GigaChatChatConfig {
@@ -204,7 +260,7 @@ export class GigaChatChatLanguageModel {
 
     const rawResult = await client.chat(payload).catch(normalizeError);
     // Deep-clone to strip hidden axios/http references that cause cyclic errors in Bun
-    const rawResponse = JSON.parse(JSON.stringify(rawResult));
+    const rawResponse = safeClone(rawResult);
     const choice = rawResponse.choices?.[0];
 
     if (!choice) {
@@ -268,14 +324,12 @@ export class GigaChatChatLanguageModel {
 
     const stream = new ReadableStream({
       async start(controller) {
-        if (!isV2) {
-          controller.enqueue({ type: 'stream-start', warnings });
-        }
+        controller.enqueue({ type: 'stream-start', warnings });
 
         try {
           for await (const rawChunk of asyncIterator) {
             // Deep-clone to strip hidden axios/http references
-            const chunk = JSON.parse(JSON.stringify(rawChunk));
+            const chunk = safeClone(rawChunk);
 
             if (options.includeRawChunks) {
               controller.enqueue({ type: 'raw', rawValue: chunk });
@@ -307,29 +361,23 @@ export class GigaChatChatLanguageModel {
             const delta = choice.delta;
             if (!delta) continue;
 
-            // Text content
+            // Text content — emit both V2 and V3 fields for compatibility
             if (delta.content != null && delta.content.length > 0) {
-              if (isV2) {
-                controller.enqueue({
-                  type: 'text-delta',
-                  textDelta: delta.content,
-                });
-              } else {
-                if (!isActiveText) {
-                  controller.enqueue({ type: 'text-start', id: 'txt-0' });
-                  isActiveText = true;
-                }
-                controller.enqueue({
-                  type: 'text-delta',
-                  id: 'txt-0',
-                  delta: delta.content,
-                });
+              if (!isActiveText) {
+                controller.enqueue({ type: 'text-start', id: 'txt-0' });
+                isActiveText = true;
               }
+              controller.enqueue({
+                type: 'text-delta',
+                id: 'txt-0',
+                delta: delta.content,
+                textDelta: delta.content,
+              });
             }
 
             // GigaChat sends complete function_call in one chunk
             if (delta.function_call) {
-              if (!isV2 && isActiveText) {
+              if (isActiveText) {
                 controller.enqueue({ type: 'text-end', id: 'txt-0' });
                 isActiveText = false;
               }
@@ -385,7 +433,7 @@ export class GigaChatChatLanguageModel {
           }
 
           // Stream ended
-          if (!isV2 && isActiveText) {
+          if (isActiveText) {
             controller.enqueue({ type: 'text-end', id: 'txt-0' });
           }
           controller.enqueue({
